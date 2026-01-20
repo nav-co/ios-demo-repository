@@ -50,68 +50,54 @@ jobs:
           set -e
           
           # --- Helper Functions ---
+          print_info() { echo -e "\033[34m[INFO]\033[0m $1"; }
+          print_error() { echo -e "\033[31m[ERROR]\033[0m $1"; }
           
-          print_info() {
-            echo -e "\033[34m[INFO]\033[0m $1"
-          }
-          
-          print_error() {
-            echo -e "\033[31m[ERROR]\033[0m $1"
-          }
-          
-          # Calculates size of the Simulator directory
           get_simulator_size() {
             local sim_path="$HOME/Library/Developer/CoreSimulator/Devices"
             if [ -d "$sim_path" ]; then
-              # -s: summary only, -h: human readable (e.g., 2.5G)
               du -sh "$sim_path" | awk '{print $1}'
             else
               echo "0B"
             fi
           }
           
-          # Checks available space on the main disk
-          get_free_space() {
-            # df -h / shows disk usage for root. 
-            # awk gets the 'Avail' column (usually 4th col on macOS)
-            df -h / | tail -1 | awk '{print $4}'
-          }
-          
           # --- Main Script ---
           
-          if ! command -v xcrun &> /dev/null; then
-              print_error "xcrun command not found."
-              exit 1
-          fi
+          # 1. Debug: Show what is actually currently installed/created
+          print_info "--- DEBUG: Current Devices List (Summary) ---"
+          xcrun simctl list devices | grep "Devices" -A 20 || true
+          print_info "--- End Debug ---"
           
           print_info "--- Pre-Cleanup Statistics ---"
           START_SIM_SIZE=$(get_simulator_size)
-          START_FREE_SPACE=$(get_free_space)
           print_info "Current Simulator Folder Size: $START_SIM_SIZE"
-          print_info "Current Free Disk Space:       $START_FREE_SPACE"
-          print_info "------------------------------"
           
           print_info "Shutting down booted simulators..."
           xcrun simctl shutdown all || true
           
           if [[ -z "$os_versions_to_include" ]]; then
-              print_info "No specific OS versions to keep were provided."
-              print_info "Deleting ALL unavailable simulators..."
+              print_info "No versions to keep specified. Deleting all..."
               xcrun simctl delete unavailable
-              print_info "Erasing ALL simulators..."
               xcrun simctl erase all
           else
-              print_info "Preserving simulators for OS versions: $os_versions_to_include"
+              # 2. FIX: Convert dots to hyphens (e.g., "17.0" -> "17-0")
+              # This ensures it matches Apple's internal naming scheme (iOS-17-0)
+              NORMALIZED_VERSIONS=$(echo "$os_versions_to_include" | sed 's/\./-/g')
               
+              print_info "Raw input: $os_versions_to_include"
+              print_info "Normalized filter (hyphens): $NORMALIZED_VERSIONS"
+          
               if ! command -v jq &> /dev/null; then
-                  print_error "jq is required for this script but not installed."
+                  print_error "jq is required."
                   exit 1
               fi
           
               JSON_OUTPUT=$(xcrun simctl list devices -j)
-              ARGS_JSON=$(echo "$os_versions_to_include" | jq -R . | jq -s .)
+              ARGS_JSON=$(echo "$NORMALIZED_VERSIONS" | jq -R . | jq -s .)
           
-              # Find IDs to delete
+              # 3. Find IDs to delete
+              # We look for Runtime Keys that DO NOT contain our normalized version string
               IDS_TO_DELETE=$(echo "$JSON_OUTPUT" | jq -r --argjson allowed "$ARGS_JSON" '
                 .devices | to_entries[] | 
                 .key as $runtime | 
@@ -120,7 +106,8 @@ jobs:
               ')
           
               if [[ -z "$IDS_TO_DELETE" ]]; then
-                  print_info "No simulators found that need deletion based on your filter."
+                  print_info "No specific device instances matched for deletion."
+                  print_info "This usually means no devices exist for the versions you want to delete."
               else
                   COUNT=$(echo "$IDS_TO_DELETE" | wc -l | xargs)
                   print_info "Deleting $COUNT simulators..."
@@ -133,10 +120,7 @@ jobs:
           
           print_info "--- Post-Cleanup Statistics ---"
           END_SIM_SIZE=$(get_simulator_size)
-          END_FREE_SPACE=$(get_free_space)
-          
-          print_info "Old Simulator Size: $START_SIM_SIZE -> New: $END_SIM_SIZE"
-          print_info "Old Free Space:     $START_FREE_SPACE -> New: $END_FREE_SPACE"
-          print_info "-------------------------------"
+          print_info "Old Size: $START_SIM_SIZE -> New: $END_SIM_SIZE"
+          print_info "Cleanup Done."
           print_info "Cleanup Done."
         
