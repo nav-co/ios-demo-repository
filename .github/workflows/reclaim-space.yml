@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 jobs:
   # This workflow contains a single job called "build"
-  build:
+  reclaim:
     # The type of runner that the job will run on
     runs-on:
       group: Bitrise-M4Pro
