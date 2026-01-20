@@ -44,7 +44,7 @@ jobs:
           echo "BYTES_RECLAIMED=${DIFF_BYTES}" >> $GITHUB_ENV
       - name: Cleanup Simulators
         env:
-          os_versions_to_include: "17.0"
+          os_versions_to_keep: "26.2"
         run: |
           #!/usr/bin/env bash
           set -e
@@ -80,7 +80,7 @@ jobs:
           xcrun simctl shutdown all || true
           
           # 1. Normalize Input
-          if [[ -z "$os_versions_to_include" ]]; then
+          if [[ -z "$os_versions_to_keep" ]]; then
               print_info "No versions to keep specified. Deleting all..."
               xcrun simctl delete unavailable
               xcrun simctl erase all
@@ -95,10 +95,10 @@ jobs:
           fi
           
           # Convert "17.0" -> "17-0"
-          NORMALIZED_VERSIONS=$(echo "$os_versions_to_include" | sed 's/\./-/g')
+          NORMALIZED_VERSIONS=$(echo "$os_versions_to_keep" | sed 's/\./-/g')
           
           print_info "--- Configuration ---"
-          print_info "Input Raw:        $os_versions_to_include"
+          print_info "Input Raw:        $os_versions_to_keep"
           print_info "Searching for:    $NORMALIZED_VERSIONS"
           print_info "---------------------"
           
@@ -154,27 +154,9 @@ jobs:
           print_info "Old Free Space:     $START_FREE_SPACE -> New: $END_FREE_SPACE"
           print_info "-------------------------------"
           print_info "Cleanup Done."
-      - name: Debug Runtime List
-        run: |
-          #!/usr/bin/env bash
-          set -e
-          
-          echo "--- 1. Checking xcrun location ---"
-          which xcrun
-          
-          echo "--- 2. Checking active Xcode path ---"
-          xcode-select -p
-          
-          echo "--- 3. Raw Output of 'xcrun simctl runtime list' (Text) ---"
-          xcrun simctl runtime list || true
-          
-          echo "--- 4. Raw Output of 'xcrun simctl runtime list -j' (JSON) ---"
-          # We capture it to a variable to ensure it's not empty, then print it
-          JSON=$(xcrun simctl runtime list -j 2>&1 || true)
-          echo "$JSON"
       - name: Cleanup Runtimes (OS Images)
         env:
-          os_versions_to_include: "17"
+          os_versions_to_keep: "26.2"
         run: |
           #!/usr/bin/env bash
           set -e
@@ -196,7 +178,7 @@ jobs:
           print_info "--- Pre-Cleanup Disk Space ---"
           START_FREE=$(get_free_space)
           print_info "Free Space: $START_FREE"
-          print_info "Filter: Keeping versions containing '$os_versions_to_include'"
+          print_info "Filter: Keeping versions containing '$os_versions_to_keep'"
           print_info "------------------------------"
 
           # Get Runtimes list in JSON
@@ -227,7 +209,7 @@ jobs:
 
               should_keep=false
 
-              if [[ -n "$os_versions_to_include" ]]; then
+              if [[ -n "$os_versions_to_keep" ]]; then
                   while IFS= read -r keep_v; do
                       if [[ -n "$keep_v" ]]; then
                           # Check if version (e.g. "17.5") OR identifier (e.g. "...iOS-17-5") matches
@@ -236,7 +218,7 @@ jobs:
                               break
                           fi
                       fi
-                  done <<< "$os_versions_to_include"
+                  done <<< "$os_versions_to_keep"
               fi
 
               # Display Name for logs
