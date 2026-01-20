@@ -207,40 +207,31 @@ jobs:
               exit 0
           fi
 
-          # DEBUG: Uncomment the next line if it fails again to see the raw JSON structure
-          # echo "$JSON_OUTPUT"
-
-          # FIX: Determine where the array is. 
-          # Some versions return { "runtimes": [...] }, others just [...]
-          if echo "$JSON_OUTPUT" | jq -e '.runtimes' > /dev/null 2>&1; then
-             QUERY=".runtimes[]"
-          else
-             QUERY=".[]"
-          fi
-
-          # Check if the query results in valid data before looping
-          if ! echo "$JSON_OUTPUT" | jq -e "$QUERY" > /dev/null 2>&1; then
-             print_info "JSON parsed successfully but no runtimes array found."
-             exit 0
-          fi
-
-          # Iterate through runtimes
-          echo "$JSON_OUTPUT" | jq -c "$QUERY" | while read -r runtime_json; do
+          # FIX: Handle Dictionary Structure (UUID -> Object)
+          # We use 'values[]' to ignore the keys and just get the object data
+          # We also look for .version and .name, defaulting to empty if missing
+          echo "$JSON_OUTPUT" | jq -c 'values[]' | while read -r runtime_json; do
               
-              # Extract data safely. If fields are missing, default to empty string.
-              name=$(echo "$runtime_json" | jq -r '.name // ""')
+              # Extract data (using // "" to handle potential missing fields)
+              # Note: Your JSON output shows "runtimeIdentifier" instead of "name" sometimes,
+              # so we check both to be safe for filtering.
+              id=$(echo "$runtime_json" | jq -r '.identifier // ""')
               version=$(echo "$runtime_json" | jq -r '.version // ""')
-              guid=$(echo "$runtime_json" | jq -r '.guid // ""')
+              runtime_id=$(echo "$runtime_json" | jq -r '.runtimeIdentifier // ""')
               
-              # Skip if data is malformed
-              if [[ -z "$guid" ]]; then continue; fi
+              # Combine fields for matching (e.g. "com.apple.CoreSimulator.SimRuntime.iOS-17-5")
+              full_name="$id $runtime_id"
+              
+              # Skip if identifier is missing
+              if [[ -z "$id" ]]; then continue; fi
 
               should_keep=false
 
               if [[ -n "$os_versions_to_include" ]]; then
                   while IFS= read -r keep_v; do
                       if [[ -n "$keep_v" ]]; then
-                          if [[ "$name" == *"$keep_v"* ]] || [[ "$version" == *"$keep_v"* ]]; then
+                          # Check if version (e.g. "17.5") OR identifier (e.g. "...iOS-17-5") matches
+                          if [[ "$version" == *"$keep_v"* ]] || [[ "$full_name" == *"$keep_v"* ]]; then
                               should_keep=true
                               break
                           fi
@@ -248,15 +239,19 @@ jobs:
                   done <<< "$os_versions_to_include"
               fi
 
+              # Display Name for logs
+              display_name="Runtime: $version ($runtime_id)"
+
               if [ "$should_keep" = true ]; then
-                  print_success "$name ($version)"
+                  print_success "$display_name"
               else
-                  print_delete "$name ($version)"
+                  print_delete "$display_name"
                   
-                  if xcrun simctl runtime delete "$guid" 2>/dev/null; then
+                  # Delete command
+                  if xcrun simctl runtime delete "$id" 2>/dev/null; then
                        echo "         -> Deleted."
                   else
-                       echo "         -> Skipped (System/Bundled runtime)."
+                       echo "         -> Skipped (System/Bundled runtime or read-only)."
                   fi
               fi
           done
