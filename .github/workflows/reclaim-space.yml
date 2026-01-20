@@ -51,76 +51,75 @@ jobs:
           
           # --- Helper Functions ---
           print_info() { echo -e "\033[34m[INFO]\033[0m $1"; }
-          print_error() { echo -e "\033[31m[ERROR]\033[0m $1"; }
-          
-          get_simulator_size() {
-            local sim_path="$HOME/Library/Developer/CoreSimulator/Devices"
-            if [ -d "$sim_path" ]; then
-              du -sh "$sim_path" | awk '{print $1}'
-            else
-              echo "0B"
-            fi
-          }
           
           # --- Main Script ---
-          
-          # 1. Debug: Show what is actually currently installed/created
-          print_info "--- DEBUG: Current Devices List (Summary) ---"
-          xcrun simctl list devices | grep "Devices" -A 20 || true
-          print_info "--- End Debug ---"
-          
-          print_info "--- Pre-Cleanup Statistics ---"
-          START_SIM_SIZE=$(get_simulator_size)
-          print_info "Current Simulator Folder Size: $START_SIM_SIZE"
           
           print_info "Shutting down booted simulators..."
           xcrun simctl shutdown all || true
           
+          # 1. Normalize Input
+          # If input is empty, we don't filter (delete all).
           if [[ -z "$os_versions_to_include" ]]; then
               print_info "No versions to keep specified. Deleting all..."
               xcrun simctl delete unavailable
               xcrun simctl erase all
-          else
-              # 2. FIX: Convert dots to hyphens (e.g., "17.0" -> "17-0")
-              # This ensures it matches Apple's internal naming scheme (iOS-17-0)
-              NORMALIZED_VERSIONS=$(echo "$os_versions_to_include" | sed 's/\./-/g')
-              
-              print_info "Raw input: $os_versions_to_include"
-              print_info "Normalized filter (hyphens): $NORMALIZED_VERSIONS"
-          
-              if ! command -v jq &> /dev/null; then
-                  print_error "jq is required."
-                  exit 1
-              fi
-          
-              JSON_OUTPUT=$(xcrun simctl list devices -j)
-              ARGS_JSON=$(echo "$NORMALIZED_VERSIONS" | jq -R . | jq -s .)
-          
-              # 3. Find IDs to delete
-              # We look for Runtime Keys that DO NOT contain our normalized version string
-              IDS_TO_DELETE=$(echo "$JSON_OUTPUT" | jq -r --argjson allowed "$ARGS_JSON" '
-                .devices | to_entries[] | 
-                .key as $runtime | 
-                select(any($allowed[]; $runtime | contains(.)) | not) |
-                .value[].udid
-              ')
-          
-              if [[ -z "$IDS_TO_DELETE" ]]; then
-                  print_info "No specific device instances matched for deletion."
-                  print_info "This usually means no devices exist for the versions you want to delete."
-              else
-                  COUNT=$(echo "$IDS_TO_DELETE" | wc -l | xargs)
-                  print_info "Deleting $COUNT simulators..."
-                  echo "$IDS_TO_DELETE" | xargs -I {} xcrun simctl delete {}
-              fi
-              
-              print_info "Pruning 'unavailable' devices..."
-              xcrun simctl delete unavailable
+              exit 0
           fi
           
-          print_info "--- Post-Cleanup Statistics ---"
-          END_SIM_SIZE=$(get_simulator_size)
-          print_info "Old Size: $START_SIM_SIZE -> New: $END_SIM_SIZE"
-          print_info "Cleanup Done."
-          print_info "Cleanup Done."
+          # Convert "17.0" -> "17-0"
+          NORMALIZED_VERSIONS=$(echo "$os_versions_to_include" | sed 's/\./-/g')
+          
+          print_info "--- Configuration ---"
+          print_info "Input Raw:        $os_versions_to_include"
+          print_info "Searching for:    $NORMALIZED_VERSIONS"
+          print_info "---------------------"
+          
+          if ! command -v jq &> /dev/null; then
+              echo "jq is required."
+              exit 1
+          fi
+          
+          JSON_OUTPUT=$(xcrun simctl list devices -j)
+          ARGS_JSON=$(echo "$NORMALIZED_VERSIONS" | jq -R . | jq -s .)
+          
+          print_info "--- analyzing runtimes ---"
+          
+          # We perform the logic in a loop to print the decision for every runtime found
+          echo "$JSON_OUTPUT" | jq -r '.devices | keys[]' | while read -r runtime_key; do
+              
+              # Check if this runtime key contains ANY of our allowed strings
+              # We use grep for a simple substring check here for visibility
+              should_keep=false
+              for version in $NORMALIZED_VERSIONS; do
+                  if [[ "$runtime_key" == *"$version"* ]]; then
+                      should_keep=true
+                      break
+                  fi
+              done
+          
+              if [ "$should_keep" = true ]; then
+                  echo -e "\033[32m[KEEP]\033[0m   $runtime_key matches '$version'"
+              else
+                  echo -e "\033[31m[DELETE]\033[0m $runtime_key (No match)"
+                  
+                  # Get all UDIDs for this specific runtime and delete them
+                  # We extract just the UDIDs for this specific Key
+                  UDIDS=$(echo "$JSON_OUTPUT" | jq -r --arg key "$runtime_key" '.devices[$key][].udid')
+                  
+                  if [[ -z "$UDIDS" ]]; then
+                       echo "         (No devices exist in this runtime to delete)"
+                  else
+                       # Delete them
+                       echo "$UDIDS" | while read -r udid; do
+                          echo "         Deleting device: $udid"
+                          xcrun simctl delete "$udid"
+                       done
+                  fi
+              fi
+          done
+          
+          print_info "--------------------------"
+          print_info "Pruning 'unavailable' devices..."
+          xcrun simctl delete unavailable
+          print_info "Done."
         
