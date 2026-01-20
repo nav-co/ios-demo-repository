@@ -1,4 +1,4 @@
-name: Build
+name: Reclaim
 on:
   #push:
   workflow_dispatch:
