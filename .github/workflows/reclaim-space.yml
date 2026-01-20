@@ -1,0 +1,101 @@
+name: Build
+on:
+  #push:
+  workflow_dispatch:
+jobs:
+  # This workflow contains a single job called "build"
+  build:
+    # The type of runner that the job will run on
+    runs-on:
+      group: Bitrise-M4Pro
+      labels: [bitrise_pool_name:M4ProXL]
+
+    # Steps represent a sequence of tasks that will be executed as part of the job
+    steps:
+      - name: Resize APFS Container
+        shell: bash
+        # We set space_to_claim to 0 to claim all available space, 
+        # as referenced in your script logic
+        env:
+          space_to_claim: "0" 
+        run: |
+          #!/usr/bin/env bash
+          set -e
+          set -o pipefail
+          
+          # debug log
+          if [[ $(uname) != "Darwin" ]]; then
+              echo "Error: This script is designed for macOS only."
+              exit 1
+          fi
+          
+          # Run diskutil list and capture the output
+          DISKUTIL_OUTPUT=$(diskutil list)
+          
+          # Echo the diskutil output for reference
+          echo "Disk listing:"
+          echo "$DISKUTIL_OUTPUT"
+          echo "----------------------------------------"
+          
+          # Find the internal physical disk
+          INTERNAL_DISK=""
+          CONTAINER_SCHEME=""
+          PARTITION_NUM=""
+          
+          echo "Searching for internal physical disk with APFS container..."
+          
+          # Note: Simple bash loops over variables behave differently than files.
+          # We will parse the output line by line.
+          while IFS= read -r line; do
+              # Check if it's a disk line (starts with /dev/disk)
+              if [[ $line =~ ^/dev/disk([0-9]+) ]]; then
+                  CURRENT_DISK="disk${BASH_REMATCH[1]}"
+                  INTERNAL=false
+                  PHYSICAL=false
+                  CONTAINER_FOUND=false
+              fi
+              # Check if it's internal
+              if [[ $line =~ "internal" ]]; then
+                  INTERNAL=true
+              fi
+              # Check if it's physical
+              if [[ $line =~ "physical" ]]; then
+                  PHYSICAL=true
+              fi
+              # Look for Apple_APFS Container
+              if [[ $line =~ Apple_APFS[[:space:]]+Container ]]; then
+                  CONTAINER_FOUND=true
+                  # Extract the partition identifier (e.g. disk0s2)
+                  # The output usually looks like "   2: Apple_APFS Container disk1" or similar
+                  # Your original awk logic might be fragile depending on exact formatting.
+                  # A safer bet is looking at the identifier at the end of the line if available,
+                  # OR using the index number at start of line.
+                  
+                  # Assuming standard output: "   1: Apple_APFS Container Name +Size DiskIdentifier"
+                  CONTAINER_IDENTIFIER=$(echo "$line" | awk '{print $NF}')
+              fi
+              
+              # If we have found an internal physical disk with an APFS container logic
+              # Note: GitHub runners are VMs, they might report as 'virtual' instead of 'physical'
+              # depending on the virtualization layer. Be careful with the 'physical' check.
+              if [[ $INTERNAL == true && $CONTAINER_FOUND == true ]]; then
+                  CONTAINER_SCHEME=$CONTAINER_IDENTIFIER
+                  # break # Careful breaking, ensure we got the right one
+              fi
+          done <<< "$DISKUTIL_OUTPUT"
+          
+          # Fallback if the complex parsing failed (Common in CI environments):
+          # Often CI main drive is just mounted at /
+          if [[ -z $CONTAINER_SCHEME ]]; then
+             echo "Complex parsing failed or no physical disk found (VM?). Trying to resolve root volume."
+             MOUNT_POINT="/"
+             CONTAINER_SCHEME=$(diskutil info "$MOUNT_POINT" | grep "Part of Whole" | awk '{print $4}')
+          fi
+
+          if [[ -z $CONTAINER_SCHEME ]]; then
+              echo "Error: Could not determine APFS container."
+              exit 1
+          fi
+          
+          echo "BYTES_RECLAIMED=${DIFF_BYTES}" >> $GITHUB_ENV
+        
