@@ -51,18 +51,46 @@ jobs:
           
           # --- Helper Functions ---
           print_info() { echo -e "\033[34m[INFO]\033[0m $1"; }
+          print_success() { echo -e "\033[32m[KEEP]\033[0m $1"; }
+          print_delete() { echo -e "\033[31m[DELETE]\033[0m $1"; }
+          
+          get_simulator_size() {
+            local sim_path="$HOME/Library/Developer/CoreSimulator/Devices"
+            if [ -d "$sim_path" ]; then
+              du -sh "$sim_path" | awk '{print $1}'
+            else
+              echo "0B"
+            fi
+          }
+          
+          get_free_space() {
+            df -h / | tail -1 | awk '{print $4}'
+          }
           
           # --- Main Script ---
+          
+          print_info "--- Pre-Cleanup Statistics ---"
+          START_SIM_SIZE=$(get_simulator_size)
+          START_FREE_SPACE=$(get_free_space)
+          print_info "Current Simulator Folder Size: $START_SIM_SIZE"
+          print_info "Current Free Disk Space:       $START_FREE_SPACE"
+          print_info "------------------------------"
           
           print_info "Shutting down booted simulators..."
           xcrun simctl shutdown all || true
           
           # 1. Normalize Input
-          # If input is empty, we don't filter (delete all).
           if [[ -z "$os_versions_to_include" ]]; then
               print_info "No versions to keep specified. Deleting all..."
               xcrun simctl delete unavailable
               xcrun simctl erase all
+              
+              # Skip the detailed logic loop if we just wiped everything
+              print_info "--- Post-Cleanup Statistics ---"
+              END_SIM_SIZE=$(get_simulator_size)
+              END_FREE_SPACE=$(get_free_space)
+              print_info "Old Size: $START_SIM_SIZE -> New: $END_SIM_SIZE"
+              print_info "Old Free: $START_FREE_SPACE -> New: $END_FREE_SPACE"
               exit 0
           fi
           
@@ -80,16 +108,14 @@ jobs:
           fi
           
           JSON_OUTPUT=$(xcrun simctl list devices -j)
-          ARGS_JSON=$(echo "$NORMALIZED_VERSIONS" | jq -R . | jq -s .)
           
-          print_info "--- analyzing runtimes ---"
+          print_info "--- Analyzing Runtimes ---"
           
-          # We perform the logic in a loop to print the decision for every runtime found
+          # Loop through every Runtime found on the system
           echo "$JSON_OUTPUT" | jq -r '.devices | keys[]' | while read -r runtime_key; do
               
-              # Check if this runtime key contains ANY of our allowed strings
-              # We use grep for a simple substring check here for visibility
               should_keep=false
+              # Check if this runtime key contains ANY of our allowed strings
               for version in $NORMALIZED_VERSIONS; do
                   if [[ "$runtime_key" == *"$version"* ]]; then
                       should_keep=true
@@ -98,20 +124,18 @@ jobs:
               done
           
               if [ "$should_keep" = true ]; then
-                  echo -e "\033[32m[KEEP]\033[0m   $runtime_key matches '$version'"
+                  print_success "  $runtime_key matches '$version'"
               else
-                  echo -e "\033[31m[DELETE]\033[0m $runtime_key (No match)"
-                  
-                  # Get all UDIDs for this specific runtime and delete them
-                  # We extract just the UDIDs for this specific Key
+                  # No match found, delete devices in this runtime
                   UDIDS=$(echo "$JSON_OUTPUT" | jq -r --arg key "$runtime_key" '.devices[$key][].udid')
                   
                   if [[ -z "$UDIDS" ]]; then
-                       echo "         (No devices exist in this runtime to delete)"
+                       # No devices existed for this runtime anyway
+                       print_delete "$runtime_key (No devices found)"
                   else
-                       # Delete them
+                       print_delete "$runtime_key (Deleting devices...)"
                        echo "$UDIDS" | while read -r udid; do
-                          echo "         Deleting device: $udid"
+                          echo "         Deleting: $udid"
                           xcrun simctl delete "$udid"
                        done
                   fi
@@ -121,5 +145,13 @@ jobs:
           print_info "--------------------------"
           print_info "Pruning 'unavailable' devices..."
           xcrun simctl delete unavailable
-          print_info "Done."
+          
+          print_info "--- Post-Cleanup Statistics ---"
+          END_SIM_SIZE=$(get_simulator_size)
+          END_FREE_SPACE=$(get_free_space)
+          
+          print_info "Old Simulator Size: $START_SIM_SIZE -> New: $END_SIM_SIZE"
+          print_info "Old Free Space:     $START_FREE_SPACE -> New: $END_FREE_SPACE"
+          print_info "-------------------------------"
+          print_info "Cleanup Done."
         
