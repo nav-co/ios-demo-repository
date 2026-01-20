@@ -189,7 +189,6 @@ jobs:
               exit 0
           fi
 
-          # FIX: Handle Dictionary Structure (UUID -> Object)
           # We use 'values[]' to ignore the keys and just get the object data
           # We also look for .version and .name, defaulting to empty if missing
           echo "$JSON_OUTPUT" | jq -c 'values[]' | while read -r runtime_json; do
