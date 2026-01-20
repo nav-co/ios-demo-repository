@@ -154,4 +154,83 @@ jobs:
           print_info "Old Free Space:     $START_FREE_SPACE -> New: $END_FREE_SPACE"
           print_info "-------------------------------"
           print_info "Cleanup Done."
+      - name: Cleanup Runtimes (OS Images)
+        # Keeps any runtime containing "17". Deletes everything else (iOS 16, tvOS, watchOS).
+        env:
+          os_versions_to_include: "17"
+        run: |
+          #!/usr/bin/env bash
+          set -e
+
+          # --- Helper Functions ---
+          print_info() { echo -e "\033[34m[INFO]\033[0m $1"; }
+          print_success() { echo -e "\033[32m[KEEP]\033[0m $1"; }
+          print_delete() { echo -e "\033[31m[DELETE]\033[0m $1"; }
+          
+          get_free_space() { df -h / | tail -1 | awk '{print $4}'; }
+
+          # --- Main Script ---
+          
+          if ! command -v jq &> /dev/null; then
+              echo "jq is required but not found."
+              exit 1
+          fi
+
+          print_info "--- Pre-Cleanup Disk Space ---"
+          START_FREE=$(get_free_space)
+          print_info "Free Space: $START_FREE"
+          print_info "Filter: Keeping versions containing '$os_versions_to_include'"
+          print_info "------------------------------"
+
+          # Get Runtimes list in JSON
+          JSON_OUTPUT=$(xcrun simctl runtime list -j 2>/dev/null || true)
+
+          if [[ -z "$JSON_OUTPUT" ]]; then
+              echo "No runtimes found or simctl failed."
+              exit 0
+          fi
+
+          # Iterate through runtimes
+          echo "$JSON_OUTPUT" | jq -c '.runtimes[]' | while read -r runtime_json; do
+              
+              name=$(echo "$runtime_json" | jq -r '.name')
+              version=$(echo "$runtime_json" | jq -r '.version')
+              guid=$(echo "$runtime_json" | jq -r '.guid')
+              
+              should_keep=false
+
+              if [[ -n "$os_versions_to_include" ]]; then
+                  # Check input against Name or Version
+                  # Loop over input lines (handles multi-line inputs)
+                  while IFS= read -r keep_v; do
+                      if [[ -n "$keep_v" ]]; then
+                          if [[ "$name" == *"$keep_v"* ]] || [[ "$version" == *"$keep_v"* ]]; then
+                              should_keep=true
+                              break
+                          fi
+                      fi
+                  done <<< "$os_versions_to_include"
+              fi
+
+              if [ "$should_keep" = true ]; then
+                  print_success "$name ($version)"
+              else
+                  print_delete "$name ($version)"
+                  
+                  # Attempt deletion.
+                  # Note: This will fail for runtimes bundled inside Xcode.app (read-only),
+                  # but will succeed for extra runtimes (tvOS/watchOS) downloaded separately.
+                  if xcrun simctl runtime delete "$guid" 2>/dev/null; then
+                       echo "         -> Deleted."
+                  else
+                       echo "         -> Skipped (System/Bundled runtime)."
+                  fi
+              fi
+          done
+
+          print_info "-------------------------------"
+          print_info "--- Post-Cleanup Disk Space ---"
+          END_FREE=$(get_free_space)
+          print_info "Free Space: $START_FREE -> $END_FREE"
+          print_info "Done."
         
