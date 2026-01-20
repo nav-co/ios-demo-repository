@@ -154,6 +154,24 @@ jobs:
           print_info "Old Free Space:     $START_FREE_SPACE -> New: $END_FREE_SPACE"
           print_info "-------------------------------"
           print_info "Cleanup Done."
+      - name: Debug Runtime List
+        run: |
+          #!/usr/bin/env bash
+          set -e
+          
+          echo "--- 1. Checking xcrun location ---"
+          which xcrun
+          
+          echo "--- 2. Checking active Xcode path ---"
+          xcode-select -p
+          
+          echo "--- 3. Raw Output of 'xcrun simctl runtime list' (Text) ---"
+          xcrun simctl runtime list || true
+          
+          echo "--- 4. Raw Output of 'xcrun simctl runtime list -j' (JSON) ---"
+          # We capture it to a variable to ensure it's not empty, then print it
+          JSON=$(xcrun simctl runtime list -j 2>&1 || true)
+          echo "$JSON"
       - name: Cleanup Runtimes (OS Images)
         env:
           os_versions_to_include: "17"
