@@ -13,6 +13,7 @@ jobs:
     # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
       - name: Resize APFS Container
+        if: false
         shell: bash
         # We set space_to_claim to 0 to claim all available space, 
         # as referenced in your script logic
@@ -41,4 +42,101 @@ jobs:
           DIFF_BYTES=$((AFTER_BYTES - BEFORE_BYTES))
           echo "Claimed ${DIFF_BYTES} bytes"
           echo "BYTES_RECLAIMED=${DIFF_BYTES}" >> $GITHUB_ENV
+      - name: Cleanup Simulators
+        env:
+          os_versions_to_include: "17.0"
+        run: |
+          #!/usr/bin/env bash
+          set -e
+          
+          # --- Helper Functions ---
+          
+          print_info() {
+            echo -e "\033[34m[INFO]\033[0m $1"
+          }
+          
+          print_error() {
+            echo -e "\033[31m[ERROR]\033[0m $1"
+          }
+          
+          # Calculates size of the Simulator directory
+          get_simulator_size() {
+            local sim_path="$HOME/Library/Developer/CoreSimulator/Devices"
+            if [ -d "$sim_path" ]; then
+              # -s: summary only, -h: human readable (e.g., 2.5G)
+              du -sh "$sim_path" | awk '{print $1}'
+            else
+              echo "0B"
+            fi
+          }
+          
+          # Checks available space on the main disk
+          get_free_space() {
+            # df -h / shows disk usage for root. 
+            # awk gets the 'Avail' column (usually 4th col on macOS)
+            df -h / | tail -1 | awk '{print $4}'
+          }
+          
+          # --- Main Script ---
+          
+          if ! command -v xcrun &> /dev/null; then
+              print_error "xcrun command not found."
+              exit 1
+          fi
+          
+          print_info "--- Pre-Cleanup Statistics ---"
+          START_SIM_SIZE=$(get_simulator_size)
+          START_FREE_SPACE=$(get_free_space)
+          print_info "Current Simulator Folder Size: $START_SIM_SIZE"
+          print_info "Current Free Disk Space:       $START_FREE_SPACE"
+          print_info "------------------------------"
+          
+          print_info "Shutting down booted simulators..."
+          xcrun simctl shutdown all || true
+          
+          if [[ -z "$os_versions_to_include" ]]; then
+              print_info "No specific OS versions to keep were provided."
+              print_info "Deleting ALL unavailable simulators..."
+              xcrun simctl delete unavailable
+              print_info "Erasing ALL simulators..."
+              xcrun simctl erase all
+          else
+              print_info "Preserving simulators for OS versions: $os_versions_to_include"
+              
+              if ! command -v jq &> /dev/null; then
+                  print_error "jq is required for this script but not installed."
+                  exit 1
+              fi
+          
+              JSON_OUTPUT=$(xcrun simctl list devices -j)
+              ARGS_JSON=$(echo "$os_versions_to_include" | jq -R . | jq -s .)
+          
+              # Find IDs to delete
+              IDS_TO_DELETE=$(echo "$JSON_OUTPUT" | jq -r --argjson allowed "$ARGS_JSON" '
+                .devices | to_entries[] | 
+                .key as $runtime | 
+                select(any($allowed[]; $runtime | contains(.)) | not) |
+                .value[].udid
+              ')
+          
+              if [[ -z "$IDS_TO_DELETE" ]]; then
+                  print_info "No simulators found that need deletion based on your filter."
+              else
+                  COUNT=$(echo "$IDS_TO_DELETE" | wc -l | xargs)
+                  print_info "Deleting $COUNT simulators..."
+                  echo "$IDS_TO_DELETE" | xargs -I {} xcrun simctl delete {}
+              fi
+              
+              print_info "Pruning 'unavailable' devices..."
+              xcrun simctl delete unavailable
+          fi
+          
+          print_info "--- Post-Cleanup Statistics ---"
+          END_SIM_SIZE=$(get_simulator_size)
+          END_FREE_SPACE=$(get_free_space)
+          
+          print_info "Old Simulator Size: $START_SIM_SIZE -> New: $END_SIM_SIZE"
+          print_info "Old Free Space:     $START_FREE_SPACE -> New: $END_FREE_SPACE"
+          print_info "-------------------------------"
+          print_info "Cleanup Done."
         
