@@ -155,7 +155,6 @@ jobs:
           print_info "-------------------------------"
           print_info "Cleanup Done."
       - name: Cleanup Runtimes (OS Images)
-        # Keeps any runtime containing "17". Deletes everything else (iOS 16, tvOS, watchOS).
         env:
           os_versions_to_include: "17"
         run: |
@@ -190,18 +189,37 @@ jobs:
               exit 0
           fi
 
+          # DEBUG: Uncomment the next line if it fails again to see the raw JSON structure
+          # echo "$JSON_OUTPUT"
+
+          # FIX: Determine where the array is. 
+          # Some versions return { "runtimes": [...] }, others just [...]
+          if echo "$JSON_OUTPUT" | jq -e '.runtimes' > /dev/null 2>&1; then
+             QUERY=".runtimes[]"
+          else
+             QUERY=".[]"
+          fi
+
+          # Check if the query results in valid data before looping
+          if ! echo "$JSON_OUTPUT" | jq -e "$QUERY" > /dev/null 2>&1; then
+             print_info "JSON parsed successfully but no runtimes array found."
+             exit 0
+          fi
+
           # Iterate through runtimes
-          echo "$JSON_OUTPUT" | jq -c '.runtimes[]' | while read -r runtime_json; do
+          echo "$JSON_OUTPUT" | jq -c "$QUERY" | while read -r runtime_json; do
               
-              name=$(echo "$runtime_json" | jq -r '.name')
-              version=$(echo "$runtime_json" | jq -r '.version')
-              guid=$(echo "$runtime_json" | jq -r '.guid')
+              # Extract data safely. If fields are missing, default to empty string.
+              name=$(echo "$runtime_json" | jq -r '.name // ""')
+              version=$(echo "$runtime_json" | jq -r '.version // ""')
+              guid=$(echo "$runtime_json" | jq -r '.guid // ""')
               
+              # Skip if data is malformed
+              if [[ -z "$guid" ]]; then continue; fi
+
               should_keep=false
 
               if [[ -n "$os_versions_to_include" ]]; then
-                  # Check input against Name or Version
-                  # Loop over input lines (handles multi-line inputs)
                   while IFS= read -r keep_v; do
                       if [[ -n "$keep_v" ]]; then
                           if [[ "$name" == *"$keep_v"* ]] || [[ "$version" == *"$keep_v"* ]]; then
@@ -217,9 +235,6 @@ jobs:
               else
                   print_delete "$name ($version)"
                   
-                  # Attempt deletion.
-                  # Note: This will fail for runtimes bundled inside Xcode.app (read-only),
-                  # but will succeed for extra runtimes (tvOS/watchOS) downloaded separately.
                   if xcrun simctl runtime delete "$guid" 2>/dev/null; then
                        echo "         -> Deleted."
                   else
