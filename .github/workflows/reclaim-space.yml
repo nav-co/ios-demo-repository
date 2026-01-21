@@ -8,7 +8,7 @@ jobs:
     # The type of runner that the job will run on
     runs-on:
       group: Bitrise-M4Pro
-      labels: [bitrise_pool_name:M4Pro]
+      labels: [bitrise_pool_name:M4ProXL]
 
     # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
