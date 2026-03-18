@@ -1,0 +1,53 @@
+name: Build and Release for Test
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on:
+      group: Bitrise-M4Pro
+    steps:
+      - name: Setup Signal iOS
+        run: |
+          rm -rf Signal-iOS/
+          git clone --depth=1 --recurse-submodules https://github.com/signalapp/Signal-iOS
+          cd Signal-iOS
+          make dependencies
+
+      - name: Build app for Simulator
+        run: |
+          cd Signal-iOS
+          # Added -sdk iphonesimulator to force a simulator build
+          # Added -derivedDataPath to easily locate the output .app file
+          env NSUnbufferedIO=YES xcodebuild build \
+            -scheme Signal \
+            -workspace Signal.xcworkspace \
+            -sdk iphonesimulator \
+            -configuration Debug \
+            -derivedDataPath derived_data \
+            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO
+
+      - name: Zip Simulator App
+        run: |
+          cd Signal-iOS/derived_data/Build/Products/Debug-iphonesimulator
+          # Simulator builds must be distributed as zipped .app directories
+          zip -r Signal-Simulator.zip Signal.app
+
+      - name: Upload to Bitrise Release Management
+        env:
+          # Pass the secret PAT from GitHub Secrets
+          BITRISE_PAT: ${{ secrets.BITRISE_PAT }}
+          # Pass the App ID from GitHub Variables (or use secrets.CONNECTED_APP_ID if it's a secret)
+          CONNECTED_APP_ID: ${{ vars.CONNECTED_APP_ID }}
+        run: |
+          # Download the Bitrise upload script
+          curl -sLo upload_installable_artifact.sh https://raw.githubusercontent.com/bitrise-io/release-management-recipes/main/api/upload_installable_artifact.sh
+          chmod +x upload_installable_artifact.sh
+          
+          # Execute the script pointing to the zipped simulator app
+          ARTIFACT_PATH="Signal-iOS/derived_data/Build/Products/Debug-iphonesimulator/Signal-Simulator.zip"
+          
+          ./upload_installable_artifact.sh \
+            --app-id "$CONNECTED_APP_ID" \
+            --artifact-path "$ARTIFACT_PATH" \
+            --artifact-type "ios-simulator"
