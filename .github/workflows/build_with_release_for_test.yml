@@ -35,19 +35,19 @@ jobs:
 
       - name: Upload to Bitrise Release Management
         env:
-          # Pass the secret PAT from GitHub Secrets
           AUTHORIZATION_TOKEN: ${{ secrets.BITRISE_PAT }}
-          # Pass the App ID from GitHub Variables (or use secrets.CONNECTED_APP_ID if it's a secret)
-          CONNECTED_APP_ID: ${{ vars.BITRISE_CONNECTED_APP_ID }}
+          CONNECTED_APP_ID: ${{ vars.CONNECTED_APP_ID }}
         run: |
-          # Download the Bitrise upload script
-          curl -sLo upload_installable_artifact.sh https://raw.githubusercontent.com/bitrise-io/release-management-recipes/main/api/upload_installable_artifact.sh
-          chmod +x upload_installable_artifact.sh
+          # Clone the Bitrise scripts repository to get all necessary utility files
+          git clone https://github.com/bitrise-io/release-management-recipes.git
           
-          # Execute the script pointing to the zipped simulator app
+          # Define the artifact path
           ARTIFACT_PATH="Signal-iOS/derived_data/Build/Products/Debug-iphonesimulator/Signal-Simulator.zip"
           
-          ./upload_installable_artifact.sh \
+          # Make the script executable and run it from the cloned folder
+          chmod +x release-management-recipes/api/upload_installable_artifact.sh
+          
+          ./release-management-recipes/api/upload_installable_artifact.sh \
             --app-id "$CONNECTED_APP_ID" \
             --artifact-path "$ARTIFACT_PATH" \
             --artifact-type "ios-simulator"
