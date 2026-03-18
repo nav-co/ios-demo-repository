@@ -36,9 +36,9 @@ jobs:
       - name: Upload to Bitrise Release Management
         env:
           # Pass the secret PAT from GitHub Secrets
-          BITRISE_PAT: ${{ secrets.BITRISE_PAT }}
+          AUTHORIZATION_TOKEN: ${{ secrets.BITRISE_PAT }}
           # Pass the App ID from GitHub Variables (or use secrets.CONNECTED_APP_ID if it's a secret)
-          CONNECTED_APP_ID: ${{ vars.CONNECTED_APP_ID }}
+          CONNECTED_APP_ID: ${{ vars.BITRISE_CONNECTED_APP_ID }}
         run: |
           # Download the Bitrise upload script
           curl -sLo upload_installable_artifact.sh https://raw.githubusercontent.com/bitrise-io/release-management-recipes/main/api/upload_installable_artifact.sh
