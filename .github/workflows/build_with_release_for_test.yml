@@ -40,34 +40,6 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO | xcpretty
 
-      - name: Package simulator app as IPA
-        run: |
-          set -euxo pipefail
-
-          # Find the .app inside the archive
-          APP_PATH=$(find "$ARCHIVE_PATH/Products" -name "*.app" -type d | head -n 1)
-
-          if [ -z "$APP_PATH" ]; then
-            echo "Error: No .app found inside the xcarchive"
-            find "$ARCHIVE_PATH" -type d -maxdepth 4
-            exit 1
-          fi
-
-          APP_NAME=$(basename "$APP_PATH")
-          IPA_DIR="${{ github.workspace }}/build/ipa_payload"
-          IPA_PATH="${{ github.workspace }}/build/${APP_NAME%.app}.ipa"
-
-          # Create the Payload directory structure expected by .ipa format
-          mkdir -p "$IPA_DIR/Payload"
-          cp -R "$APP_PATH" "$IPA_DIR/Payload/"
-
-          # Package as .ipa (which is just a zip with Payload/*.app inside)
-          cd "$IPA_DIR"
-          zip -r -q "$IPA_PATH" Payload
-
-          echo "ARTIFACT_PATH=$IPA_PATH" >> "$GITHUB_ENV"
-          echo "Artifact packaged at: $IPA_PATH ($(stat -f%z "$IPA_PATH") bytes)"
-
       - name: Upload to Bitrise Release Management
         env:
           AUTHORIZATION_TOKEN: ${{ secrets.BITRISE_PAT }}
