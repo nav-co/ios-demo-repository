@@ -1,4 +1,4 @@
-name: Build With Cache
+name: Build and Release for Test
 on:
   #push:
   workflow_dispatch:
