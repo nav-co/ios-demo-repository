@@ -26,6 +26,44 @@ jobs:
           curl --retry 5 -sSfL 'https://raw.githubusercontent.com/bitrise-io/bitrise-build-cache-cli/main/install/installer.sh' | sh -s -- -b /tmp/bin -d
           /tmp/bin/bitrise-build-cache activate xcode --cache --cache-push
 
+      - name: Install signing certificate and provisioning profile
+        env:
+          CERTIFICATE_P12: ${{ secrets.CERTIFICATE_P12 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
+          PROVISIONING_PROFILE: ${{ secrets.PROVISIONING_PROFILE }}
+        run: |
+          set -euxo pipefail
+
+          # Create a temporary keychain
+          KEYCHAIN_PATH="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 24)
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Import the certificate
+          CERT_PATH="$RUNNER_TEMP/certificate.p12"
+          echo "$CERTIFICATE_P12" | base64 --decode > "$CERT_PATH"
+          security import "$CERT_PATH" \
+            -P "$CERTIFICATE_PASSWORD" \
+            -A \
+            -t cert \
+            -f pkcs12 \
+            -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+
+          # Install the provisioning profile
+          PROFILE_PATH="$RUNNER_TEMP/profile.mobileprovision"
+          echo "$PROVISIONING_PROFILE" | base64 --decode > "$PROFILE_PATH"
+          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c "Print UUID" /dev/stdin <<< "$(security cms -D -i "$PROFILE_PATH")")
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp "$PROFILE_PATH" ~/Library/MobileDevice/Provisioning\ Profiles/"$PROFILE_UUID".mobileprovision
+
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+          echo "Installed certificate and profile ($PROFILE_UUID)"
+
       - name: Build app
         env:
           DEVELOPER_DIR: /Applications/Xcode-26.2.0.app/Contents/Developer
@@ -35,11 +73,7 @@ jobs:
             -project podcasts.xcodeproj \
             -scheme "Pocket Casts Prototype Build" \
             -destination "generic/platform=iOS" \
-            -archivePath "$ARCHIVE_PATH" \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "${{ secrets.APP_STORE_CONNECT_KEY_PATH }}" \
-            -authenticationKeyID "${{ secrets.APP_STORE_CONNECT_KEY_ID }}" \
-            -authenticationKeyIssuerID "${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}" | xcpretty
+            -archivePath "$ARCHIVE_PATH" | xcpretty
 
       - name: Export IPA
         env:
@@ -47,7 +81,6 @@ jobs:
         run: |
           set -euxo pipefail
 
-          # Create ExportOptions plist for ad-hoc distribution
           cat > ExportOptions.plist <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -56,7 +89,7 @@ jobs:
             <key>method</key>
             <string>ad-hoc</string>
             <key>signingStyle</key>
-            <string>automatic</string>
+            <string>manual</string>
           </dict>
           </plist>
           EOF
@@ -64,16 +97,17 @@ jobs:
           xcodebuild -exportArchive \
             -archivePath "$ARCHIVE_PATH" \
             -exportPath "${{ github.workspace }}/build/export" \
-            -exportOptionsPlist ExportOptions.plist \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "${{ secrets.APP_STORE_CONNECT_KEY_PATH }}" \
-            -authenticationKeyID "${{ secrets.APP_STORE_CONNECT_KEY_ID }}" \
-            -authenticationKeyIssuerID "${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}"
+            -exportOptionsPlist ExportOptions.plist
 
-          # Find the exported IPA
           IPA_PATH=$(find "${{ github.workspace }}/build/export" -name "*.ipa" | head -n 1)
           echo "ARTIFACT_PATH=$IPA_PATH" >> "$GITHUB_ENV"
           echo "Exported IPA: $IPA_PATH ($(stat -f%z "$IPA_PATH") bytes)"
+
+      - name: Clean up signing
+        if: always()
+        run: |
+          security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/certificate.p12" "$RUNNER_TEMP/profile.mobileprovision"
 
       - name: Upload to Bitrise Release Management
         env:
