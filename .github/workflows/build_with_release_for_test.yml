@@ -36,7 +36,7 @@ jobs:
       - name: Upload to Bitrise Release Management
         env:
           AUTHORIZATION_TOKEN: ${{ secrets.BITRISE_PAT }}
-          CONNECTED_APP_ID: ${{ vars.CONNECTED_APP_ID }}
+          CONNECTED_APP_ID: ${{ vars.BITRISE_CONNECTED_APP_ID }}
         run: |
           # Clone the Bitrise scripts repository to get all necessary utility files
           git clone https://github.com/bitrise-io/release-management-recipes.git
