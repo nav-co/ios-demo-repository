@@ -1,4 +1,4 @@
-name: Build and Release for Test
+name: Build With Cache
 on:
   #push:
   workflow_dispatch:
@@ -40,7 +40,7 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO | xcpretty
 
-      - name: Package simulator app as ZIP
+      - name: Package simulator app as IPA
         run: |
           set -euxo pipefail
 
@@ -54,13 +54,19 @@ jobs:
           fi
 
           APP_NAME=$(basename "$APP_PATH")
-          ZIP_PATH="${{ github.workspace }}/build/${APP_NAME%.app}-simulator.zip"
+          IPA_DIR="${{ github.workspace }}/build/ipa_payload"
+          IPA_PATH="${{ github.workspace }}/build/${APP_NAME%.app}.ipa"
 
-          # Zip the .app bundle — this is the distributable artifact
-          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ZIP_PATH"
+          # Create the Payload directory structure expected by .ipa format
+          mkdir -p "$IPA_DIR/Payload"
+          cp -R "$APP_PATH" "$IPA_DIR/Payload/"
 
-          echo "ARTIFACT_PATH=$ZIP_PATH" >> "$GITHUB_ENV"
-          echo "Artifact packaged at: $ZIP_PATH ($(stat -f%z "$ZIP_PATH") bytes)"
+          # Package as .ipa (which is just a zip with Payload/*.app inside)
+          cd "$IPA_DIR"
+          zip -r -q "$IPA_PATH" Payload
+
+          echo "ARTIFACT_PATH=$IPA_PATH" >> "$GITHUB_ENV"
+          echo "Artifact packaged at: $IPA_PATH ($(stat -f%z "$IPA_PATH") bytes)"
 
       - name: Upload to Bitrise Release Management
         env:
