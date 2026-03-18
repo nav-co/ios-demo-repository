@@ -1,53 +1,82 @@
-name: Build and Release for Test
+name: Build With Cache
 on:
+  #push:
   workflow_dispatch:
-
 jobs:
   build:
     runs-on:
       group: Bitrise-M4Pro
+    env:
+      ARCHIVE_PATH: ${{ github.workspace }}/build/PocketCasts.xcarchive
     steps:
-      - name: Setup Signal iOS
+      - name: Setup Pocket Casts iOS
         run: |
-          rm -rf Signal-iOS/
-          git clone --depth=1 --recurse-submodules https://github.com/signalapp/Signal-iOS
-          cd Signal-iOS
-          make dependencies
+          git clone --depth=1 --recurse-submodules https://github.com/benbitrise/pocket-casts-ios
+          cd pocket-casts-ios
+          make install_dependencies
+          make external_contributor
 
-      - name: Build app for Simulator
+      - name: Enable Xcode Build Cache
+        shell: bash
+        env:
+          BITRISE_BUILD_CACHE_AUTH_TOKEN: ${{ secrets.BITRISE_PAT }}
+          BITRISE_BUILD_CACHE_WORKSPACE_ID: ${{ secrets.BITRISE_WORKSPACE_ID }}
         run: |
-          cd Signal-iOS
-          # Added -sdk iphonesimulator to force a simulator build
-          # Added -derivedDataPath to easily locate the output .app file
-          env NSUnbufferedIO=YES xcodebuild build \
-            -scheme Signal \
-            -workspace Signal.xcworkspace \
-            -sdk iphonesimulator \
-            -configuration Debug \
-            -derivedDataPath derived_data \
-            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO
+          set -euxo pipefail
+          curl --retry 5 -sSfL 'https://raw.githubusercontent.com/bitrise-io/bitrise-build-cache-cli/main/install/installer.sh' | sh -s -- -b /tmp/bin -d
+          /tmp/bin/bitrise-build-cache activate xcode --cache --cache-push
 
-      - name: Zip Simulator App
+      - name: Build app
+        env:
+          DEVELOPER_DIR: /Applications/Xcode-26.2.0.app/Contents/Developer
         run: |
-          cd Signal-iOS/derived_data/Build/Products/Debug-iphonesimulator
-          # Simulator builds must be distributed as zipped .app directories
-          zip -r Signal-Simulator.zip Signal.app
+          cd pocket-casts-ios
+          set -o pipefail && xcodebuild archive \
+            -project podcasts.xcodeproj \
+            -scheme "Pocket Casts Prototype Build" \
+            -destination "generic/platform=iOS Simulator" \
+            -archivePath "$ARCHIVE_PATH" \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO | xcpretty
+
+      - name: Package simulator app as ZIP
+        run: |
+          set -euxo pipefail
+
+          # Find the .app inside the archive
+          APP_PATH=$(find "$ARCHIVE_PATH/Products" -name "*.app" -type d | head -n 1)
+
+          if [ -z "$APP_PATH" ]; then
+            echo "Error: No .app found inside the xcarchive"
+            find "$ARCHIVE_PATH" -type d -maxdepth 4
+            exit 1
+          fi
+
+          APP_NAME=$(basename "$APP_PATH")
+          ZIP_PATH="${{ github.workspace }}/build/${APP_NAME%.app}-simulator.zip"
+
+          # Zip the .app bundle — this is the distributable artifact
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ZIP_PATH"
+
+          echo "ARTIFACT_PATH=$ZIP_PATH" >> "$GITHUB_ENV"
+          echo "Artifact packaged at: $ZIP_PATH ($(stat -f%z "$ZIP_PATH") bytes)"
 
       - name: Upload to Bitrise Release Management
         env:
           AUTHORIZATION_TOKEN: ${{ secrets.BITRISE_PAT }}
           CONNECTED_APP_ID: ${{ vars.BITRISE_CONNECTED_APP_ID }}
+          BRANCH: ${{ github.ref_name }}
+          WORKFLOW: ${{ github.workflow }}
         run: |
+          set -euxo pipefail
+
           # Clone the Bitrise scripts repository to get all necessary utility files
-          git clone https://github.com/bitrise-io/release-management-recipes.git
-          
-          # Define the artifact path
-          ARTIFACT_PATH="Signal-iOS/derived_data/Build/Products/Debug-iphonesimulator/Signal-Simulator.zip"
-          
-          # Make the script executable and run it from the cloned folder
-          chmod +x release-management-recipes/api/upload_installable_artifact.sh
-          
-          ./release-management-recipes/api/upload_installable_artifact.sh \
-            --app-id "$CONNECTED_APP_ID" \
-            --artifact-path "$ARTIFACT_PATH" \
-            --artifact-type "ios-simulator"
+          git clone --depth=1 https://github.com/bitrise-io/release-management-recipes.git
+
+          # Verify the artifact exists and has a size
+          echo "Uploading artifact: $ARTIFACT_PATH"
+          ls -la "$ARTIFACT_PATH"
+
+          # Run the upload script
+          /bin/bash ./release-management-recipes/api/upload_installable_artifact.sh
