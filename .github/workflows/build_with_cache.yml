@@ -1,4 +1,4 @@
-name: Build-with-cache
+name: Build
 on:
   #push:
   workflow_dispatch:
@@ -8,27 +8,59 @@ jobs:
     # The type of runner that the job will run on
     runs-on:
       group: Bitrise-M4Pro
-
+    # Build Cache credentials, job-level so every step (incl. the build) sees them.
+    # The CLI resolves the token env-vars-first, keychain second.
+    env:
+      BITRISE_BUILD_CACHE_AUTH_TOKEN: ${{ secrets.BITRISE_PAT }}
+      BITRISE_BUILD_CACHE_WORKSPACE_ID: ${{ secrets.BITRISE_WORKSPACE_ID }}
     # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
-      
-      - name: Enable Xcode Build Cache
-        shell: bash
-        env:
-          BITRISE_BUILD_CACHE_AUTH_TOKEN: ${{secrets.BITRISE_PAT}}
-          BITRISE_BUILD_CACHE_WORKSPACE_ID: ${{secrets.BITRISE_WORKSPACE_ID}}
+      # Install the CLI and activate Xcode caching. NOTE: no `daemon` here — the
+      # launchd daemon is for persistent machines; on ephemeral CI VMs it doesn't
+      # stay up and isn't needed. The xcodebuild wrapper starts a transient proxy
+      # per build, which is the CI-native path.
+      - name: Enable Bitrise Build Cache (Xcode)
         run: |
-          #!/usr/bin/env bash
           set -euxo pipefail
-          
-          # download Bitrise Build Cache CLI
           curl --retry 5 -sSfL 'https://raw.githubusercontent.com/bitrise-io/bitrise-build-cache-cli/main/install/installer.sh' | sh -s -- -b /tmp/bin -d
-          # run the CLI to enable Bitrise build cache for Xcode
           /tmp/bin/bitrise-build-cache activate xcode --cache --cache-push
-          /tmp/bin/bitrise-build-cache daemon install
-          /tmp/bin/bitrise-build-cache daemon up
-          /tmp/bin/bitrise-build-cache daemon info      # confirm xcelerateProxy is accepting connections
-          /tmp/bin/bitrise-build-cache doctor           # sanity check: expect ✓ auth-backend, ✓ xcelerate-proxy
+
+      # Pin the credential to the multiplatform config on disk. The Xcode proxy
+      # resolves auth as keychain -> multiplatform config (it never reads env),
+      # and `activate` writes this file WITHOUT the token when the keychain save
+      # succeeds. Writing it here (AFTER activate) gives the proxy a credential
+      # source that survives keychain changes. Harmless here (no fastlane/keychain
+      # swap in this job) but keeps parity with the signed pipeline.
+      # NOTE: no `set -x`, so the token is never echoed to the log.
+      - name: Pin Build Cache credential to disk (keychain-independent)
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.bitrise/analytics/multiplatform
+          cat > ~/.bitrise/analytics/multiplatform/config.json <<EOF
+          {
+            "authConfig": {
+              "AuthToken": "${BITRISE_BUILD_CACHE_AUTH_TOKEN}",
+              "WorkspaceID": "${BITRISE_BUILD_CACHE_WORKSPACE_ID}"
+            }
+          }
+          EOF
+          chmod 600 ~/.bitrise/analytics/multiplatform/config.json
+          /tmp/bin/bitrise-build-cache doctor           # sanity check: expect ✓ auth-backend
+
+      # TEST: delete the keychain credential so the ONLY on-disk/keychain source
+      # left is the multiplatform config we just pinned. If the build still caches
+      # with 0 "unauthenticated", it proves the proxy authenticates from the disk
+      # config alone (i.e. the fastlane keychain-swap fix will work).
+      # Use raw `security` — NOT `bitrise-build-cache auth clear`, which also
+      # scrubs the multiplatform config and would defeat the test.
+      - name: TEST - remove keychain credential (force multiplatform-config auth)
+        run: |
+          set -euo pipefail
+          security delete-generic-password -s "bitrise-build-cache" -a "default" \
+            && echo "keychain credential deleted" \
+            || echo "no keychain item found (already absent)"
+          # Proxy must now resolve auth from ~/.bitrise/analytics/multiplatform/config.json
+          /tmp/bin/bitrise-build-cache doctor || true
 
       # Runs a set of commands using the runners shell
       - name: Setup Signal iOS
@@ -37,9 +69,10 @@ jobs:
           git clone --depth=1 --recurse-submodules https://github.com/signalapp/Signal-iOS
           cd Signal-iOS
           make dependencies
-          
       - name: Build app
         run: |
           cd Signal-iOS
+          # PATH now points at ~/.bitrise-xcelerate/bin/xcodebuild (the cache wrapper),
+          # exported to $GITHUB_ENV by `activate` in the step above.
           which xcodebuild
           env NSUnbufferedIO=YES xcodebuild build -scheme Signal -workspace Signal.xcworkspace CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO
