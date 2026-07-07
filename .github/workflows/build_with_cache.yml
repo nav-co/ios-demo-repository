@@ -11,13 +11,7 @@ jobs:
 
     # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
-      # Runs a set of commands using the runners shell
-      - name: Setup Signal iOS
-        run: |
-          rm -rf Signal-iOS/
-          git clone --depth=1 --recurse-submodules https://github.com/signalapp/Signal-iOS
-          cd Signal-iOS
-          make dependencies
+      
       - name: Enable Xcode Build Cache
         shell: bash
         env:
@@ -31,7 +25,21 @@ jobs:
           curl --retry 5 -sSfL 'https://raw.githubusercontent.com/bitrise-io/bitrise-build-cache-cli/main/install/installer.sh' | sh -s -- -b /tmp/bin -d
           # run the CLI to enable Bitrise build cache for Xcode
           /tmp/bin/bitrise-build-cache activate xcode --cache --cache-push
+          /tmp/bin/bitrise-build-cache daemon install
+          /tmp/bin/bitrise-build-cache daemon up
+          /tmp/bin/bitrise-build-cache daemon info      # confirm xcelerateProxy is accepting connections
+          /tmp/bin/bitrise-build-cache doctor           # sanity check: expect ✓ auth-backend, ✓ xcelerate-proxy
+
+      # Runs a set of commands using the runners shell
+      - name: Setup Signal iOS
+        run: |
+          rm -rf Signal-iOS/
+          git clone --depth=1 --recurse-submodules https://github.com/signalapp/Signal-iOS
+          cd Signal-iOS
+          make dependencies
+          
       - name: Build app
         run: |
           cd Signal-iOS
+          which xcodebuild
           env NSUnbufferedIO=YES xcodebuild build -scheme Signal -workspace Signal.xcworkspace CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO
